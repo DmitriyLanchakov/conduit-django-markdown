@@ -28,7 +28,16 @@ REST_FRAMEWORK = {
 }
 ```
 
+{x: pagination default_pagination_class setting}
+Add the `DEFAULT_PAGINATION_CLASS` setting to `settings.REST_FRAMEWORK`.
+
+{x: pagination page_size setting}
+Add the `PAGE_SIZE` setting to `settings.REST_FRAMEWORK`.
+
 The TL;DR (too long; didn’t read) here is that DRF offers multiple pagination strategies. The one we’ve chosen is the `LimitOffsetPagination` strategy. This will allow the client to pass in two query parameters to any endpoint that returns multiple documents: `limit` and `offset`. `limit` refers to the number of documents to be returned. `offset` is where we should start looking for documents to return for this page. The `PAGE_SIZE` setting tells us that the default value for `limit` will be `20`.
+
+{x: pagination look into pagination strategies}
+Check out the different [pagination strategies](#) we get from DRF.
 
 As an example, consider a user is browsing a list of articles. The user has already been through four pages of articles and is now loading the fifth page. The client hasn’t specified the `limit` query parameter, so we’re using the default of `20`. Because the user was just looking at the fourth page of articles, we know that we’ve already shown the user 80 articles (4 pages * 20 documents per page). For the fifth page, we want to show documents 80-99, we the client will have to pass `offset` as `80`. That’s how the server knows to ignore results 0-79 when deciding what to respond with. If the client doesn’t pass `offset`, we will simply return results 0-19.
 
@@ -97,6 +106,9 @@ class ConduitJSONRenderer(JSONRenderer):
 +            })
 ```
 
+{x: pagination make renderer work with pagination}
+Update `ConduitJSONRenderer` to work with our new paginated results.
+
 These changes will let us handle rendering paginated data properly. The different here is that we’re checking for the `results` key instead of doing some arbitrary type checking for `ReturnList` that could change at any time and break out application.
 
 ## Updating the other renderers
@@ -120,6 +132,12 @@ class CommentJSONRenderer(ConduitJSONRenderer):
 +    pagination_object_count = ‘commentsCount’
 ```
 
+{x: pagination update articlejsonrenderer to work with conduitjsonrenderer}
+Update `ArticleJSONRenderer` to work with the changes to `ConduitJSONRenderer`.
+
+{x: pagination update commentjsonrenderer to work with conduitjsonrenderer}
+Update `ConduitJSONRenderer` to work with the changes to `ConduitJSONRenderer`.
+
 Now open `conduit/apps/authentication/renderers.py` and apply these changes:
 
 ```diff
@@ -132,6 +150,9 @@ class UserJSONRenderer(ConduitJSONRenderer):
         # …
 ```
 
+{x: pagination update userjsonrenderer to work with the conduitjsonrenderer}
+Update `UserJSONRenderer` to work with the changes to `ConduitJSONRenderer`.
+
 Finally, open `conduit/apps/profiles/renderers.py` and make these changes:
 
 ```diff
@@ -140,6 +161,9 @@ class ProfileJSONRenderer(ConduitJSONRenderer):
 +    pagination_object_label = 'profiles'
 +    pagination_count_label = 'profilesCount'
 ```
+
+{x: pagination update profilejsonrenderer to work with conduitjsonrenderer}
+Update `ProfileJSONRenderer` to work with the changes to `ConduitJSONRenderer`.
 
 ## Paginating Articles
 
@@ -176,5 +200,8 @@ class ArticleViewSet(mixins.CreateModelMixin,
 -        return Response(serializer.data, status=status.HTTP_200_OK)
 +        return self.get_paginated_response(serializer.data)
 ```
+
+{x: pagination add pagination to articleviewset list}
+Add pagination to the `.list()` method of `ArticleViewSet`.
 
 Now our `.list()` endpoint will paginate properly. As a final measure, open Postman and send the “All Articles” request. If the response is successful, you should now see the data under the key `articles` and the number of articles found under the key `articlesCount`. Here “the number of articles found” means the total number of articles found in the database. Not just the number returned. This is so the client can figure out when to stop asking for more data — that is, when `page * limit > articlesCount`.

@@ -34,6 +34,9 @@ class ArticlesFeedAPIView(generics.ListAPIView):
         return self.get_paginated_response(serializer.data)
 ```
 
+{x: filtering add articlesfeedapiview}
+Create the `ArticlesFeedAPIView` view.
+
 Looks pretty similar to what we’ve done before, right? The big change here is that we added a method called `.get_queryset()`. Why add this when we already have the `queryset` property set? Because, when setting the property, we don’t have access to the `request`. We need this to filter out authors the current user isn’t following.
 
 Open `conduit/apps/articles/urls.py` and make this change:
@@ -70,6 +73,9 @@ urlpatterns = [
     url(r'^', include(router.urls)),
 ]
 ```
+
+{x: filtering add articlesfeedapiview to urlpatterns}
+Add `ArticlesFeedAPIView` to `urlpatterns`.
 
 It is important that we add the URL for the feed view to the top of `urlpatterns`. If we don’t then `articles/feed/` will match the URL for each of the URLS for favoriting articles, list and creating comments, and destroying comments.
 
@@ -127,5 +133,8 @@ class ArticleViewSet(mixins.CreateModelMixin,
 
         return self.get_paginated_response(serializer.data)
 ```
+
+{x: filtering add get_queryset}
+Add the `.get_queryset()` method to `ArticleViewSet` and call it from the `.list()` method.
 
 With these changes made, you should be able to open up Postman and send each of the “Articles by Author”, “Articles Favorited by Username”, and “Articles by Tag” requests and get successful responses. Like the feed endpoint, the responses will vary depending on factors like which user wrote articles, who favorited what, and which article has what tags. The easiest way to know if these filters work is to make sure they aren’t broken. The filters are probably broken if the three requests above all return the same results as the “All Articles” request, but this depends on the same factors as above.
