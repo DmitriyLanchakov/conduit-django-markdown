@@ -1,19 +1,298 @@
+# Profiles
 
-### Registering a user with Postman
+At the end of the last chapter, we briefly touched on the difference between users and profiles, but I want to dive a little deeper before we start working on profiles.
 
-Now that we’ve created the `User` model and added an endpoint for registering new users, we’re going to run a quick sanity check to make sure we’re on track. To do this, we’re going to use a tool called Postman with a pre-made collection of endpoints.
+In software engineering, there is a concept called the [Single Responsibility Principle](https://en.wikipedia.org/wiki/Single_responsibility_principle). The idea is that each class should do one job and it should do that job very well. Why is the Single Responsibility Principle relevant to us? Because it’s the theory behind why we’re separating users and profiles.
 
-If you’ve never used Postman before, check out our [Testing Conduit Apps Using Postman](#) guide.
+Users are for authentication and authorization (permissions). The job of the `User` model is to make sure that a user is allowed to access what they’re trying to access. As an example, a user should be allowed to edit their own email and password. They should not be allowed to change the email and password of another user though.
 
-Open up Postman and use the “Register” request inside the “Auth” folder to create a new user.
+By contrast, the `Profile` model is all about displaying a user’s information in the UI. Our client will include profile pages for each user. That’s where the name of the `Profile` model comes from. Now we will take some things from the user model because there is an inherit relationship between `Profile`s and `User`s, but we will make it our goal to keep this overlap to a minimum.
 
-Awesome! We’re making some real progress now!
+Now let’s jump in and create the `Profile` model.
 
-There is one thing we need to fix though. Notice how the response from the “Register” request had all of the user’s information at the root level. Our client expects this information to be namespaced under “user”. To do that, we’ll need to create a custom [DRF renderer](http://www.django-rest-framework.org/api-guide/renderers/).
+## Creating the Profile model
 
-### Rendering User objects
+Create `conduit/apps/profiles/models.py` and add the following:
 
-Create a file called `conduit/apps/authentication/renderers.py` and give it the following content:
+```python
+from django.db import models
+
+
+class Profile(models.Model):
+    # As mentioned, there is an inherent relationship between the Profile and
+    # User models. By creating a one-to-one relationship between the two, we
+    # are formalizing this relationship. Every user will have one -- and only
+    # one -- related Profile model.
+    user = models.OneToOneField(
+        'authentication.User', on_delete=models.CASCADE
+    )
+
+    # Each user profile will have a field where they can tell other users
+    # something about themselves. This field will be empty when the user
+    # creates their account, so we specify `blank=True`.
+    bio = models.TextField(blank=True)
+
+    # In addition to the `bio` field, each user may have a profile image or
+    # avatar. Similar to `bio`, this field is not required. It may be blank.
+    image = models.URLField(blank=True)
+
+    # A timestamp representing when this object was created.
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    # A timestamp reprensenting when this object was last updated.
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return self.user.username
+```
+
+One thing you may notice is that both the `User` and `Profile` models have the `created_at` and `updated_at` fields. These are fields that we will be placing on all of our models, so why don’t we take a few minutes to abstract this into it’s own model?
+
+### Timestamped Model
+
+Create `conduit/apps/core/models.py` and add this snippet:
+
+```python
+from django.db import models
+
+
+class TimestampedModel(models.Model):
+    # A timestamp representing when this object was created.
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    # A timestamp reprensenting when this object was last updated.
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        abstract = True
+
+        # By default, any model that inherits from `TimestampedModel` should
+        # be ordered in reverse-chronological order. We can override this on a
+        # per-model basis as needed, but reverse-chronological is a good
+        # default ordering for most models.
+        ordering = ['-created_at', '-updated_at’]
+```
+
+Now go back to `conduit/apps/profiles/models.py` and apply the following changes:
+
+```diff
+from django.db import models
+
++from conduit.apps.core.models import TimestampedModel
+
+
+-class Profile(models.Model):
++class Profile(TimestampedModel):
+    # As mentioned, there is an inherent relationship between the Profile and
+    # User models. By creating a one-to-one relationship between the two, we
+    # are formalizing this relationship. Every user will have one -- and only
+    # one -- related Profile model.
+    user = models.OneToOneField(
+        'authentication.User', on_delete=models.CASCADE
+    )
+
+    # Each user profile will have a field where they can tell other users
+    # something about themselves. This field will be empty when the user
+    # creates their account, so we specify `blank=True`.
+    bio = models.TextField(blank=True)
+
+    # In addition to the `bio` field, each user may have a profile image or
+    # avatar. Similar to `bio`, this field is not required. It may be blank.
+    image = models.URLField(blank=True)
+
+-    # A timestamp representing when this object was created.
+-    created_at = models.DateTimeField(auto_now_add=True)
+-
+-    # A timestamp reprensenting when this object was last updated.
+-    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return self.user.username
+```
+
+Since we want this to apply to the `User` model as well, we’ll need to make a couple of changes there.
+
+Open `conduit/apps/authentication/models.py` and make the following changes:
+
+```diff
+import jwt
+
+from datetime import datetime, timedelta
+
+from django.conf import settings
+from django.contrib.auth.models import (
+    AbstractBaseUser, BaseUserManager, PermissionsMixin
+)
+from django.db import models
+
++from conduit.apps.core.models import TimestampedModel
+
+# …
+
+-class User(AbstractBaseUser, PermissionsMixin):
++class User(AbstractBaseUser, PermissionsMixin, TimestampedModel):
+    # Each `User` needs a human-readable unique identifier that we can use to
+    # represent the `User` in the UI. We want to index this column in the
+    # database to improve lookup performance.
+    username = models.CharField(db_index=True, max_length=255, unique=True)
+
+    # We also need a way to contact the user and a way for the user to identify
+    # themselves when logging in. Since we need an email address for contacting
+    # the user anyways, we will also use the email for logging in because it is
+    # the most common form of login credential at the time of writing.
+    email = models.EmailField(db_index=True, unique=True)
+
+    # When a user no longer wishes to use our platform, they may try to delete
+    # there account. That's a problem for us because the data we collect is
+    # valuable to us and we don't want to delete it. To solve this problem, we
+    # will simply offer users a way to deactivate their account instead of
+    # letting them delete it. That way they won't show up on the site anymore,
+    # but we can still analyze the data.
+    is_active = models.BooleanField(default=True)
+
+    # The `is_staff` flag is expected by Django to determine who can and cannot
+    # log into the Django admin site. For most users, this flag will always be
+    # falsed.
+    is_staff = models.BooleanField(default=False)
+
+-    # A timestamp representing when this object was created.
+-    created_at = models.DateTimeField(auto_now_add=True)
+-
+-    # A timestamp reprensenting when this object was last updated.
+-    updated_at = models.DateTimeField(auto_now=True)
+
+    # More fields required by Django when specifying a custom user model.
+
+    # The `USERNAME_FIELD` property tells us which field we will use to log in.
+    # In this case, we want that to be the email field.
+    USERNAME_FIELD = 'email'
+    REQUIRED_FIELDS = ['username']
+
+        # …
+```
+
+### One-to-One relationships and Django’s Signals framework
+
+In the `Profile` model, we created a one-to-one relationship between `User` and `Profile`. It would be nice if that’s all there was to it and we could call it a day. Unfortunately, that’s not the case. We still have to tell Django that we want to create a `Profile` every time we create a `User`. 
+
+To do this, we will use Django’s [Signals](https://docs.djangoproject.com/en/1.9/topics/signals/) framework. Specifically, we will use the [`post_save`](https://docs.djangoproject.com/en/1.9/ref/signals/#django.db.models.signals.post_save) signal to create the `Profile` instance after the `User` instance.
+
+Start by opening `conduit/apps/authentication/signals.py` and populating the file with the following code:
+
+```python
+from django.db.models.signals import post_save
+from django.dispatch import receiver
+
+from conduit.apps.profiles.models import Profile
+
+from .models import User
+
+@receiver(post_save, sender=User)
+def create_related_profile(sender, instance, created, *args, **kwargs):
+    # Notice that we're checking for `created` here. We only want to do this
+    # the first time the `User` instance is created. If the save that caused
+    # this signal to be run was an update action, we know the user already
+    # has a profile.
+    if instance and created:
+        instance.profile = Profile.objects.create(user=instance)
+```
+
+This is the signal that will create a profile object, but Django won’t run it by default. Instead, we need to create a custom `AppConfig` class for the `authentication` app and register it with Django.
+
+To do that, open `conduit/apps/authentication/__init__.py` and add the following:
+
+```python
+from django.apps import AppConfig
+
+
+class AuthenticationAppConfig(AppConfig):
+    name = 'conduit.apps.authentication'
+    label = 'authentication'
+    verbose_name = 'Authentication'
+
+    def ready(self):
+        import conduit.apps.authentication.signals
+
+# This is how we register our custom app config with Django. Django is smart
+# enough to look for the `default_app_config` property of each registered app
+# and use the correct app config based on that value.
+default_app_config = 'conduit.apps.authentication.AuthenticationAppConfig'
+```
+
+Now, when a new user is created, a profile should be created for that user as well. Let’s test this to double check.
+
+### Testing created_related_profile
+
+The first thing we need to do is drop our existing database. None of our existing users will have a profile, so Django will ask us to provide a default value. The problem is that this default will live in a migration and be run for every record we create in the future, which is not what we want.
+
+To drop the database, simply delete the `db.sqlite3` file in the root directory of your project.
+
+After dropping the database, we want to generate new migrations for the `profiles` app. Since this is the first time we’ll be generating migrations for `profiles`, we need to specify that it’s for the `profiles` app:
+
+```bash
+~ python manage.py makemigrations profiles
+```
+
+NOTE: The `~` in the above snippet should not be typed with the rest of the command. It is simply to identify that we’re running this command from the command line.
+
+After generating the new migrations, run the following to apply the new migrations and create a new database:
+
+```bash
+~ python manage.py migrate
+```
+
+Now you should be able to use Postman to send a registration request and create a new user with a profile. Go ahead and send that request now.
+
+Now we need to check that the profile was actually created. Run the following from the command line to open a new shell:
+
+```bash
+~ python manage.py shell_plus
+```
+
+Inside the shell, all we need to do is grab the user we just created and make sure it has a profile:
+
+```bash
+>>> u = User.objects.first()
+>>> u.profile
+<Profile: james>
+```
+
+The output you see from `u.profile` will be different based on the username of the user you created. As long as `u.profile` returns a `Profile` instance, we’re all set to move forward.
+
+## Serializing Profile objects
+
+Create `conduit/apps/profiles/serializers.py` with the following content:
+
+```python
+from rest_framework import serializers
+
+from .models import Profile
+
+
+class ProfileSerializer(serializers.ModelSerializer):
+    username = serializers.CharField(source='user.username')
+    bio = serializers.CharField(allow_blank=True, required=False)
+    image = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Profile
+        fields = ('username', 'bio', 'image',)
+        read_only_fields = ('username',)
+
+    def get_image(self, obj):
+        if obj.image:
+            return obj.image
+
+        return 'https://static.productionready.io/images/smiley-cyrus.jpg'
+```
+
+There’s nothing new here. This is very similar to the `UserSerializer` we created in the last chapter. Let’s move on.
+
+## Rendering Profile objects
+
+Since we know we’re going to run into the same issue we had with the user response data not being namespaced under “user”, let’s go ahead and create a `ProfileJSONRenderer`. This renderer will be very similar to the `UserJSONRenderer`, so we’re going to go ahead and just created a `ConduitJSONRenderer` that both `UserJSONRenderer` and `ProfileJSONRenderer` can inherit from. This will let us abstract some parts of the code away so we can avoid duplicating them.
+
+Open up `conduit/apps/core/renderers.py` and add the following:
 
 ```python
 import json
@@ -21,193 +300,150 @@ import json
 from rest_framework.renderers import JSONRenderer
 
 
-class UserJSONRenderer(JSONRenderer):
+class ConduitJSONRenderer(JSONRenderer):
     charset = 'utf-8'
+    object_label = 'object'
 
     def render(self, data, media_type=None, renderer_context=None):
+        # If the view throws an error (such as the user can't be authenticated
+        # or something similar), `data` will contain an `errors` key. We want
+        # the default JSONRenderer to handle rendering errors, so we need to
+        # check for this case.
+        errors = data.get('errors', None)
+
+        if errors is not None:
+            # As mentioned about, we will let the default JSONRenderer handle
+            # rendering errors.
+            return super(ConduitJSONRenderer, self).render(data)
+
+        return json.dumps({
+            self.object_label: data
+        })
+```
+
+The are two difference between `ConduitJSONRenderer` and the `UserJSONRenderer` we created before:
+
+1. In `UserJSONRenderer`, we did not specify an `object_label` property. The reason for this is that we knew what the object label would be for `UserJSONRenderer`: it would be `user`. In this case, however, the object label (or namespace, as referred to before) will change based on what class is inheriting from `ConduitJSONRenderer`. To make this useful, we allow `object_label` to be set dynamically and we default to the value of `object`.
+2. `UserJSONRenderer` has to worry about decoding the JWT if it is part of the request. That is a requirement specific to `UserJSONRenderer` that will not be shared by any of renderer. To that end, it doesn’t make sense to include that in `ConduitJSONRenderer`. We will handle updating `UserJSONRenderer` to take care of this case shortly.
+
+Now create `conduit/apps/profiles/renderers.py` and give it the following content:
+
+```python
+from conduit.apps.core.renderers import ConduitJSONRenderer
+
+
+class ProfileJSONRenderer(ConduitJSONRenderer):
+    object_label = 'profile'
+```
+
+There’s really not anything here before `ProfileJSONRenderer` shares so much functionality with `UserJSONRenderer`. Let’s keep going.
+
+Open `conduit/apps/authentication/renderers.py` and make the following changes:
+
+```diff
+-import json
+-
+-from rest_framework.renderers import JSONRenderer
++from conduit.apps.core.renderers import ConduitJSONRenderer
+
+
+-class UserJSONRenderer(JSONRenderer):
++class UserJSONRenderer(ConduitJSONRenderer):
+-    charset = 'utf-8'
++    object_label = ‘user’
+
+    def render(self, data, media_type=None, renderer_context=None):
+-        # If the view throws an error (such as the user can't be authenticated
+-        # or something similar), `data` will contain an `errors` key. We want
+-        # the default JSONRenderer to handle rendering errors, so we need to
+-        # check for this case.
+-        errors = data.get('errors', None)
+-
         # If we recieve a `token` key as part of the response, it will by a
         # byte object. Byte objects don't serializer well, so we need to
         # decode it before rendering the User object.
         token = data.get('token', None)
+
+-        if errors is not None:
+-            # As mentioned about, we will let the default JSONRenderer handle
+-            # rendering errors.
+-            return super(UserJSONRenderer, self).render(data)
 
         if token is not None and isinstance(token, bytes):
             # Also as mentioned above, we will decode `token` if it is of type
             # bytes.
             data['token'] = token.decode('utf-8')
 
-        # Finally, we can render our data under the "user" namespace.
-        return json.dumps({
-            'user': data
-        })
-
+-        # Finally, we can render our data under the "user" namespace.
+-        return json.dumps({
+-            'user': data
+-        })
++        return super(UserJSONRenderer, self).render(data)
 ```
 
-There’s nothing new or interesting happening here, so just read through the comments in the snippet and then we can move on.
+Basically all we’re doing here is removing the parts that are now handled by `ConduitJSONRenderer`.
 
-Now open `conduit/apps/authentication/views.py` and import `UserJSONRenderer` by adding the following line to the top of your file:
+Everything should still be working exactly as it was for `UserJSONRenderer`. Perform a “Current User” request in Postman to confirm.
+
+## ProfileRetrieveAPIView
+
+Let’s add an endpoint to retrieve information about a specific user.
+
+Create `conduit/apps/profiles/views.py` and add the following:
 
 ```python
-from .renderers import UserJSONRenderer
-```
+from rest_framework import status
+from rest_framework.generics import RetrieveAPIView
+from rest_framework.permissions import AllowAny
+from rest_framework.response import Response
 
-You’ll also need to set the `renderer_classes` property of the `RegistrationAPIView` class like so:
+from .models import Profile
+from .renderers import ProfileJSONRenderer
+from .serializers import ProfileSerializer
 
-```diff
-class UserRetrieveUpdateAPIView(RetrieveUpdateAPIView):
-    permission_classes = (IsAuthenticated,)
-+    renderer_classes = (UserJSONRenderer,)
-    serializer_class = UserSerializer
 
-    # … Other things
-```
-
-With `UserJSONRenderer` in place, go ahead and use the “Register” Postman request to create a new user. Notice how, this time, the response is inside the “user” namespace.
-
-## Logging users in
-
-Since users can now register for Conduit, we need to build a way for them to log in to their account. In this lesson we will add the serializer and view needed for users to log in. We will also start looking at how our API should handle errors.
-
-### LoginSerializer
-
-Open `conduit/apps/authentication/serializers.py` and add the following import to the top of the file:
-
-```python
-from django.contrib.auth import authenticate
-```
-
-After that, create the following serializer in the same file:
-
-```python
-class LoginSerializer(serializers.Serializer):
-    email = serializers.CharField(max_length=255)
-    username = serializers.CharField(max_length=255, read_only=True)
-    password = serializers.CharField(max_length=128, write_only=True)
-    token = serializers.CharField(max_length=255, read_only=True)
-
-    def validate(self, data):
-        # The `validate` method is where we make sure that the current
-        # instance of `LoginSerializer` has "valid". In the case of logging a
-        # user in, this means validating that they've provided an email
-        # and password and that this combination matches one of the users in
-        # our database.
-        email = data.get('email', None)
-        password = data.get('password', None)
-
-        # As mentioned above, an email is required. Raise an exception if an
-        # email is not provided.
-        if email is None:
-            raise serializers.ValidationError(
-                'An email address is required to log in.'
-            )
-
-        # As mentioned above, a password is required. Raise an exception if a
-        # password is not provided.
-        if password is None:
-            raise serializers.ValidationError(
-                'A password is required to log in.'
-            )
-
-        # The `authenticate` method is provided by Django and handles checking
-        # for a user that matches this email/password combination. Notice how
-        # we pass `email` as the `username` value. Remember that, in our User
-        # model, we set `USERNAME_FIELD` as `email`.
-        user = authenticate(username=email, password=password)
-
-        # If no user was found matching this email/password combination then
-        # `authenticate` will return `None`. Raise an exception in this case.
-        if user is None:
-            raise serializers.ValidationError(
-                'A user with this email and password was not found.'
-            )
-
-        # Django provides a flag on our `User` model called `is_active`. The
-        # purpose of this flag to tell us whether the user has been banned
-        # or otherwise deactivated. This will almost never be the case, but
-        # it is worth checking for. Raise an exception in this case.
-        if not user.is_active:
-            raise serializers.ValidationError(
-                'This user has been deactivated.'
-            )
-
-        # The `validate` method should return a dictionary of validated data.
-        # This is the data that is passed to the `create` and `update` methods
-        # that we will see later on.
-        return {
-            'email': user.email,
-            'username': user.username,
-            'token': user.token
-        }
-```
-
-With the serializer in place, let’s move on to creating the view.
-
-### LoginAPIView
-
-Open `conduit/apps/authentication/views.py` and update the following import:
-
-```diff
--from .serializers import RegistrationSerializer
-+from .serializers import (
-+    LoginSerializer, RegistrationSerializer
-+)
-```
-
-Then add the new login view:
-
-```python
-class LoginAPIView(APIView):
+class ProfileRetrieveAPIView(RetrieveAPIView):
     permission_classes = (AllowAny,)
-    renderer_classes = (UserJSONRenderer,)
-    serializer_class = LoginSerializer
+    renderer_classes = (ProfileJSONRenderer,)
+    serializer_class = ProfileSerializer
 
-    def post(self, request):
-        user = request.data.get('user', {})
+    def retrieve(self, request, username, *args, **kwargs):
+        # Try to retrieve the requested profile and throw an exception if the
+        # profile could not be found.
+        try:
+            # We use the `select_related` method to avoid making unnecessary
+            # database calls.
+            profile = Profile.objects.select_related('user').get(
+                user__username=username
+            )
+        except Profile.DoesNotExist:
+            raise
 
-        # Notice here that we do not call `serializer.save()` like we did for
-        # the registration endpoint. This is because we don't actually have
-        # anything to save. Instead, the `validate` method on our serializer
-        # handles everything we need.
-        serializer = self.serializer_class(data=user)
-        serializer.is_valid(raise_exception=True)
+        serializer = self.serializer_class(profile)
 
         return Response(serializer.data, status=status.HTTP_200_OK)
 ```
 
-Open `conduit/apps/authentication/urls.py` and update the following import:
+In the code above, we handle the case where the requested profile doesn’t exist, but we don’t handle it in a very clean way. In particular, we don’t have control over what the error message the client will receive is. Let’s do something about that.
 
-```diff
--from .views import RegistrationAPIView
-+from .views import LoginAPIView, RegistrationAPIView
-```
+### ProfileDoesNotExist
 
-And add a new rule to the `urlpatterns` list:
-
-```diff
-urlpatterns = [
-    url(r'^users/?$', RegistrationAPIView.as_view()),
-+    url(r'^users/login/?$', LoginAPIView.as_view()),
-]
-```
-
-### Logging a user in with Postman
-
-At this point, a user should be able to log in by hitting the new login endpoint. Let’s test this out. Open up Postman and use the “Login” request to log in with one of the users you created previously. If the login attempt was successful, the response will include a token that can be used in the future when making requests that require the user be authenticated.
-
-There is something else we need to handle here, though. Specifically, try using the “Login” request to log in with an invalid email/password combination. Notice the error response. There are two problems with this.
-
-First of all, `non_field_errors` sounds strange. Usually this key coresponds to whatever field caused the serializer to fail validation. In our case, since we overrode the `validate` method instead of a field-specific method such as `validate_email`, Django REST Framework didn’t know what field to attribute the error to. In this case, there is a default that can be used. By default, the default is `non_field_errors`. Since our client will be using this key to display errors, we’re going to change this to simply say `error`.
-
-Secondly, the client expects any errors to be namespaced under the `errors` key in a JSON response, similar to how we namespaced the login and register requests under the `user` key. We will accomplish this by overriding Django REST Framework’s default error handling.
-
-### Overriding EXCEPTION_HANDLER and NON_FIELD_ERRORS_KEY
-
-One of DRF’s settings is called `EXCEPTION_HANDLER`. The default exception handler simply returns a dictionary of errors. We want our errors namespaced under the `errors` key, so we’re going to have to override `EXCEPTION_HANDLER`. We will also override `NON_FIELD_ERRORS_KEY` as mentioned earlier.
-
-Let’s start by creating `conduit/apps/core/exceptions.py` and adding the following snippet:
+Create a file called `conduit/apps/profiles/exceptions.py` and add the following:
 
 ```python
-from rest_framework.views import exception_handler
+from rest_framework.exceptions import APIException
 
+
+class ProfileDoesNotExist(APIException):
+    status_code = 400
+    default_detail = 'The requested profile does not exist.'
+```
+
+This is a very simple exception. In Django REST Framework, any time you want to create a custom exception, you inherit from `APIException`. All you have to do them is specify the `default_detail` and `status_code` properties. The default of this exception can be overriden on a case-by-case basis if you decide that makes the most sense.
+
+Now head over to `conduit/apps/core/exceptions.py` and make the following change to the `core_exception_handler` function:
+
+```diff
 def core_exception_handler(exc, context):
     # If an exception is thrown that we don't explicitly handle here, we want
     # to delegate to the default exception handler offered by DRF. If we do
@@ -215,6 +451,7 @@ def core_exception_handler(exc, context):
     # generated by DRF, so we get that response up front.
     response = exception_handler(exc, context)
     handlers = {
++        'ProfileDoesNotExist': _handle_generic_error,
         'ValidationError': _handle_generic_error
     }
     # This is how we identify the type of the current exception. We will use
@@ -229,81 +466,129 @@ def core_exception_handler(exc, context):
         return handlers[exception_class](exc, context, response)
 
     return response
-
-def _handle_generic_error(exc, context, response):
-    # This is about the most straightforward exception handler we can create.
-    # We take the response generated by DRF and wrap it in the `errors` key.
-    response.data = {
-        'errors': response.data
-    }
-
-    return response
 ```
 
-Will that taken care of, open up `conduit/settings.py` and add a new setting to the bottom of the file called `REST_FRAMEWORK`, like so:
+We will handle our custom exception the same way we do a `ValidationError`, but now we have control over the error that the client will see. To bring things full-circle, let’s use `ProfileDoesNotExist` in our view.
 
-```python
-REST_FRAMEWORK = {
-    'EXCEPTION_HANDLER': 'conduit.apps.core.exceptions.core_exception_handler',
-    'NON_FIELD_ERRORS_KEY': 'error',
-}
-```
-
-This is how we override settings in DRF. We will add one more setting in a bit when we start writing views that require the user to be authenticated.
-
-Let’s try sending another login request using Postman. Be sure to use an email/password combination that is invalid.
-
-### Updating UserJSONRenderer
-
-Uh oh! Still not quite what we want. We’ve got the `errors` key now, but everything is namespaced under the `user` key. That’s not good.
-
-Let’s update `UserJSONRenderer` to check for the `errors` key and do things a bit differently. Open up `conduit/apps/authentication/renderers.py` and make these changes:
+Open up `conduit/apps/profiles/views.py` and make this change:
 
 ```diff
-class UserJSONRenderer(JSONRenderer):
-    charset = 'utf-8'
+from rest_framework import status
+from rest_framework.generics import RetrieveAPIView
+from rest_framework.permissions import AllowAny
+from rest_framework.response import Response
 
-    def render(self, data, media_type=None, renderer_context=None):
-+        # If the view throws an error (such as the user can't be authenticated
-+        # or something similar), `data` will contain an `errors` key. We want
-+        # the default JSONRenderer to handle rendering errors, so we need to
-+        # check for this case.
-+        errors = data.get('errors', None)
++from .exceptions import ProfileDoesNotExist
+from .models import Profile
+from .renderers import ProfileJSONRenderer
+from .serializers import ProfileSerializer
 
-        # If we recieve a `token` key as part of the response, it will by a
-        # byte object. Byte objects don't serializer well, so we need to
-        # decode it before rendering the User object.
-        token = data.get('token', None)
 
-+        if errors is not None:
-+            # As mentioned about, we will let the default JSONRenderer handle
-+            # rendering errors.
-+            return super(UserJSONRenderer, self).render(data)
+class ProfileRetrieveAPIView(RetrieveAPIView):
+    permission_classes = (AllowAny,)
+    renderer_classes = (ProfileJSONRenderer,)
+    serializer_class = ProfileSerializer
 
-        if token is not None and isinstance(token, bytes):
-            # Also as mentioned above, we will decode `token` if it is of type
-            # bytes.
-            data['token'] = token.decode('utf-8')
+    def retrieve(self, request, username, *args, **kwargs):
+        # Try to retrieve the requested profile and throw an exception if the
+        # profile could not be found.
+        try:
+            # We use the `select_related` method to avoid making unnecessary
+            # database calls.
+            profile = Profile.objects.select_related('user').get(
+                user__username=username
+            )
+        except Profile.DoesNotExist:
+-            raise
++            raise ProfileDoesNotExist
 
-        # Finally, we can render our data under the "user" namespace.
-        return json.dumps({
-            'user': data
-        })
+        serializer = self.serializer_class(profile)
+
+        return Response(serializer.data, status=status.HTTP_200_OK)
 ```
 
-Now send the login request with Postman one more time and all should be well.
+Problem solved! Let’s add a url for `ProfileRetrieveAPIView` to our urls file.
 
-## Retrieving and updating users
-
-Users can register new accounts and log in to those accounts. What’s next? Users will need a way to retrieve their information and update that information. Let’s get going on that before we move on to creating user profiles.
-
-### UserSerializer
-
-We’re going to create one more serializer for profile. We’ve got serializers for login and register requests, but we need to be able to serializer user objects too.
-
-Open `conduit/apps/authentication/serializers.py` and add the following:
+Create `conduit/apps/profiles/urls.py` with the following:
 
 ```python
+from django.conf.urls import url
+
+from .views import ProfileRetrieveAPIView
+
+urlpatterns = [
+    url(r'^profiles/(?P<username>\w+)/?$', ProfileRetrieveAPIView.as_view()),
+]
+```
+
+Like we did with `conduit/apps/authentication/urls.py`, we need to register this new urls file with the main `urlpatterns` variable in `conduit/urls.py`.
+
+Open up `conduit/urls.py` and make this change:
+
+```diff
+urlpatterns = [
+    url(r'^admin/', admin.site.urls),
+
+    url(r'^api/', include('conduit.apps.authentication.urls', namespace='authentication')),
++    url(r'^api/', include('conduit.apps.profiles.urls', namespace='profiles')),
+]
+```
+
+## Retrieving a profile with Postman
+
+If you open Postman and look in the “Profiles” folder, there will be a request called “Profile”. Send that request to the server to check that everything we’ve done so far is working. Assuming all is well, we can move on to updating `UserRetrieveUpdateAPIView`.
+
+## Updating UserRetrieveUpdateAPIView
+
+Open up `conduit/apps/authentication/views.py` and make the following changes in the `update` method:
+
+```diff
+def update(self, request, *args, **kwargs):
+-    serializer_data = request.data.get('user', {})
++    user_data = request.data.get('user', {})
++
++    serializer_data = {
++        ’username': user_data.get('username', request.user.username),
++        ’email': user_data.get('email', request.user.email),
++
++        ’profile': {
++            ’bio': user_data.get('bio', request.user.profile.bio),
++            ’image': user_data.get('image', request.user.profile.image)
++        }
++    }
+
+    # Here is that serialize, validate, save pattern we talked about
+    # before.
+    serializer = self.serializer_class(
+        request.user, data=serializer_data, partial=True
+    )
+    serializer.is_valid(raise_exception=True)
+    serializer.save()
+
+    return Response(serializer.data, status=status.HTTP_200_OK)
+```
+
+These changes will let us use the same endpoint for updating the email, password, biography, and image of a user.
+
+We also need to update `UserSerializer` to make the `update` method work with profiles.
+
+## Updating UserSerializer
+
+Open `conduit/apps/authentication/serializers.py` and update the imports like so:
+
+```diff
+from django.contrib.auth import authenticate
+
+from rest_framework import serializers
+
++from conduit.apps.profiles.serializers import ProfileSerializer
++
+from .models import User
+```
+
+Then we can update `UserSerializer` as follows:
+
+```diff
 class UserSerializer(serializers.ModelSerializer):
     """Handles serialization and deserialization of User objects."""
 
@@ -316,263 +601,75 @@ class UserSerializer(serializers.ModelSerializer):
         min_length=8,
         write_only=True
     )
++
++    # When a field should be handled as a serializer, we must explicitly say
++    # so. Moreover, `UserSerializer` should never expose profile information,
++    # so we set `write_only=True`.
++    profile = ProfileSerializer(write_only=True)
++
++    # We want to get the `bio` and `image` fields from the related Profile
++    # model.
++    bio = serializers.CharField(source='profile.bio', read_only=True)
++    image = serializers.CharField(source='profile.image', read_only=True)
 
     class Meta:
         model = User
-        fields = ('email', 'username', 'password', 'token',)
-
-        # The `read_only_fields` option is an alternative for explicitly
-        # specifying the field with `read_only=True` like we did for password
-        # above. The reason we want to use `read_only_fields` here is because
-        # we don't need to specify anything else about the field. For the
-        # password field, we needed to specify the `min_length` and 
-        # `max_length` properties too, but that isn't the case for the token
-        # field.
-        read_only_fields = ('token',)
-
-
-    def update(self, instance, validated_data):
-        """Performs an update on a User."""
-
-        # Passwords should not be handled with `setattr`, unlike other fields.
-        # This is because Django provides a function that handles hashing and
-        # salting passwords, which is important for security. What that means
-        # here is that we need to remove the password field from the
-        # `validated_data` dictionary before iterating over it.
-        password = validated_data.pop('password', None)
-
-        for (key, value) in validated_data.items():
-            # For the keys remaining in `validated_data`, we will set them on
-            # the current `User` instance one at a time.
-            setattr(instance, key, value)
-
-        if password is not None:
-            # `.set_password()` is the method mentioned above. It handles all
-            # of the security stuff that we shouldn't be concerned with.
-            instance.set_password(password)
-
-        # Finally, after everything has been updated, we must explicitly save
-        # the model. It's worth pointing out that `.set_password()` does not
-        # save the model.
-        instance.save()
-
-        return instance
+-        fields = (‘email’, ‘username’, ‘password’, ‘token’,)
++        fields = (
++            'email', 'username', 'password', 'token', 'profile', 'bio',
++            'image',
++        )
+    
+    # …
 ```
 
-One thing worth pointing out about the above serializer is that we do not explicitly define the `create` method. DRF provides a default `create` method for all instances of `serializers.ModelSerializer`, so it’s still possible to create a user with this serializer, but we don’t want to do that. Creation of a `User` should be handled by `RegistrationSerializer`.
-
-### UserRetrieveUpdateAPIView
-
-Open up `conduit/apps/authentication/views.py` and update the imports like so:
+Finally, we want to change the `update` method on `UserSerializer` to handle profile data. Here are the changes needed to make that work:
 
 ```diff
-from rest_framework import status
-+from rest_framework.generics import RetrieveUpdateAPIView
--from rest_framework.permissions import AllowAny
-+from rest_framework.permissions import AllowAny, IsAuthenticated
-from rest_framework.response import Response
-from rest_framework.views import APIView
+def update(self, instance, validated_data):
+    """Performs an update on a User."""
 
-from .renderers import UserJSONRenderer
-from .serializers import (
--   LoginSerializer, RegistraitonSerializer
-+    LoginSerializer, RegistrationSerializer, UserSerializer,
-)
+    # Passwords should not be handled with `setattr`, unlike other fields.
+    # This is because Django provides a function that handles hashing and
+    # salting passwords, which is important for security. What that means
+    # here is that we need to remove the password field from the
+    # `validated_data` dictionary before iterating over it.
+    password = validated_data.pop('password', None)
+
++    # Like passwords, we have to handle profiles separately. To do that,
++    # we remove the profile data from the `validated_data` dictionary.
++    profile_data = validated_data.pop('profile', {})
++
+    for (key, value) in validated_data.items():
+        # For the keys remaining in `validated_data`, we will set them on
+        # the current `User` instance one at a time.
+        setattr(instance, key, value)
+
+    if password is not None:
+        # `.set_password()` is the method mentioned above. It handles all
+        # of the security stuff that we shouldn't be concerned with.
+        instance.set_password(password)
+
+    # Finally, after everything has been updated, we must explicitly save
+    # the model. It's worth pointing out that `.set_password()` does not
+    # save the model.
+    instance.save()
+
++    for (key, value) in profile_data.items():
++        # We're doing the same thing as above, but this time we're making
++        # changes to the Profile model.
++        setattr(instance.profile, key, value)
++
++    # Save the profile just like we saved the user.
++    instance.profile.save()
++
+    return instance
 ```
 
-Below the imports, create a new view called `UserRetrieveUpdateAPIView`:
+With all of these changes made, we’re ready to release our new profile feature to our users! As a sanity check, go back to Postman and make the “Current User” and “Update User” requests in the “Auth” folder to make sure we didn’t break anything during refactoring.
 
-```python
-class UserRetrieveUpdateAPIView(RetrieveUpdateAPIView):
-    permission_classes = (IsAuthenticated,)
-    renderer_classes = (UserJSONRenderer,)
-    serializer_class = UserSerializer
+## What’s next?
 
-    def retrieve(self, request, *args, **kwargs):
-        # There is nothing to validate or save here. Instead, we just want the
-        # serializer to handle turning our `User` object into something that
-        # can be JSONified and sent to the client.
-        serializer = self.serializer_class(request.user)
+Next up is the bread and butter of our app: articles. Whether you’re the one reading the articles or you’re the one writing them, they are the most important piece of our app. Without articles, users can’t do anything at all!
 
-        return Response(serializer.data, status=status.HTTP_200_OK)
-
-    def update(self, request, *args, **kwargs):
-        serializer_data = request.data.get('user', {})
-
-        # Here is that serialize, validate, save pattern we talked about
-        # before.
-        serializer = self.serializer_class(
-            request.user, data=serializer_data, partial=True
-        )
-        serializer.is_valid(raise_exception=True)
-        serializer.save()
-
-        return Response(serializer.data, status=status.HTTP_200_OK)
-```
-
-Now go over to `apps/conduit/authentication/urls.py` and update the imports to include `UserRetrieveUpdateAPIView`:
-
-```diff
--from .views import LoginAPIView, RegistrationAPIView
-+from .views import (
-+    LoginAPIView, RegistrationAPIView, UserRetrieveUpdateAPIView
-+)
-```
-
-And add a new route to `urlpatterns`:
-
-```diff
-urlpatterns = [
-+    url(r'^user/?$', UserRetrieveUpdateAPIView.as_view()),
-    url(r'^users/?$', RegistrationAPIView.as_view()),
-    url(r'^users/login/?$', LoginAPIView.as_view()),
-]
-```
-
-Open up Postman again and send the “Current User” request. You should get an error with a response that looks like this:
-
-```json
-{
-  "user": {
-    "detail": "Authentication credentials were not provided."
-  }
-}
-```
-
-## Authenticating Users
-
-Django has this idea of authentication backends. Without going into too much detail, a backend is essentially a plan for deciding whether a user is authenticated. Because neither Django nor Django REST Framework support JWT authentication out-of-the-box, we’ll need to create a custom backend.
-
-Create and open ‘conduit/apps/authentication/backends.py` and add the following code:
-
-```python
-import jwt
-
-from django.conf import settings
-
-from rest_framework import authentication, exceptions
-
-from .models import User
-
-
-class JWTAuthentication(authentication.BaseAuthentication):
-    authentication_header_prefix = 'Token'
-
-    def authenticate(self, request):
-        """
-        The `authenticate` method is called on every request, regardless of
-        whether the endpoint requires authentication. 
-
-        `authenticate` has two possible return values:
-
-        1) `None` - We return `None` if we do not wish to authenticate. Usually
-                    this means we know authentication will fail. An example of
-                    this is when the request does not include a token in the
-                    headers.
-
-        2) `(user, token)` - We return a user/token combination when 
-                             authentication was successful.
-
-        If neither of these two cases were met, that means there was an error.
-        In the event of an error, we do not return anything. We simple raise
-        the `AuthenticationFailed` exception and let Django REST Framework
-        handle the rest.
-        """
-        request.user = None
-
-        # `auth_header` should be an array with two elements: 1) the name of
-        # the authentication header (in this case, "Token") and 2) the JWT 
-        # that we should authenticate against.
-        auth_header = authentication.get_authorization_header(request).split()
-        auth_header_prefix = self.authentication_header_prefix.lower()
-
-        if not auth_header:
-            return None
-
-        if len(auth_header) == 1:
-            # Invalid token header. No credentials provided. Do not attempt to
-            # authenticate.
-            return None
-
-        elif len(auth_header) > 2:
-            # Invalid token header. Token string should not contain spaces. Do
-            # not attempt to authenticate.
-            return None
-
-        # The JWT library we're using can't handle the `byte` type, which is
-        # commonly used by standard libraries in Python 3. To get around this,
-        # we simply have to decode `prefix` and `token`. This does not make for
-        # clean code, but it is a good decision because we would get an error
-        # if we didn't decode these values.
-        prefix = auth_header[0].decode('utf-8')
-        token = auth_header[1].decode('utf-8')
-
-        if prefix.lower() != auth_header_prefix:
-            # The auth header prefix is not what we expected. Do not attempt to
-            # authenticate.
-            return None
-
-        # By now, we are sure there is a *chance* that authentication will
-        # succeed. We delegate the actual credentials authentication to the
-        # method below.
-        return self._authenticate_credentials(request, token)
-
-    def _authenticate_credentials(self, request, token):
-        """
-        Try to authenticate the given credentials. If authentication is
-        successful, return the user and token. If not, throw an error.
-        """
-        try:
-            payload = jwt.decode(token, settings.SECRET_KEY)
-        except:
-            msg = 'Invalid authentication. Could not decode token.'
-            raise exceptions.AuthenticationFailed(msg)
-
-        try:
-            user = User.objects.get(pk=payload['id'])
-        except User.DoesNotExist:
-            msg = 'No user matching this token was found.'
-            raise exceptions.AuthenticationFailed(msg)
-
-        if not user.is_active:
-            msg = 'This user has been deactivated.'
-            raise exceptions.AuthenticationFailed(msg)
-
-        return (user, token)
-```
-
-{x: create authentication backends}
-Create `conduit/apps/authentication/backends.py`
-
-There is a lot of logic and lot of exceptions being thrown in this file, but the code is pretty straight forward. All we’ve done is list conditions where the user would not be authenticated and throw an exception if any of those conditions are true.
-
-There isn’t any extra reading to do here, but feel free to check out the docs for the [PyJWT](https://pyjwt.readthedocs.io/en/latest/) library, if you’re interested.
-
-### Telling DRF about our authentication backend
-
-We must explicitly tell Django REST Framework which authentication backend we want to use, similar to how we told Django to use our custom User model.
-
-Open up `conduit/settings.py` and add the following snippet to the end of the file:
-
-```python
-REST_FRAMEWORK = {
-    'DEFAULT_AUTHENTICATION_CLASSES': (
-        'authentication.backends.JWTAuthentication',
-    ),
-}
-```
-
-{x: register our jwt authentication backend} 
-Register our JWT authentication backend with Django REST Framework.
-
-## Retrieving and updating users with Postman
-
-With our new authentication backend in place, the authentication error we saw a while ago should be gone. Test this by opening Postman and sending another “Current User” request. The request should be successful and you should see the information about your user in the response.
-
-Remember that we created an update endpoint at the same time we created the retrieve endpoint. Let’s test this one too. Send the request labeled “Update User” in the “Auth” folder in Postman. If you used the default body, the email of your user should have changed. Feel free to play around with these requests to make changes to your user.
-
-## On to better things
-
-That’s all there is for this chapter. We’ve created a user model and serialized users in three different ways. There are four shiny new endpoints that let users register, login, and retrieve and update their information. We’re off to a really good start here!
-
-Next up, we’re going to create profiles for our users. You may have noticed that the `User` model is pretty bare-bones. We only included things essential for authentication. Other information such as a biography and avatar URL will go in the `Profile` model that we’ll work with in the next chapter.
+In the next chapter, we’ll add a model and serializer for handling articles. We’ll take a look at a new concept of a view set and we’ll add a new signal to our API. See you there!
